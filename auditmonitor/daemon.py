@@ -106,7 +106,7 @@ class Daemon(object):
             pid = None
 
         if not pid:
-            print(f"pidfile {pidfile} does not exist. Daemon not running?\n")
+            print(f"pidfile {self.pidfile} does not exist. Daemon not running?\n")
             return  # not an error in a restart
 
         if self.pid_exists(pid):
