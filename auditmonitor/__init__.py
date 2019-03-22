@@ -1,12 +1,6 @@
 #!/usr/bin/env python
 
 import os
-import sys
-
-# Add our path if necessary
-if os.path.dirname(__file__) not in sys.path:
-    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 import time
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
@@ -22,7 +16,7 @@ import traceback
 from datetime import datetime
 import json
 import re
-from daemon import Daemon
+from auditmonitor.daemon import Daemon
 from pathlib import Path
 
 hostname = ''
@@ -32,20 +26,24 @@ logQueue = Queue()
 
 current_files = set()
 
+
 def start_daemon():
-    our_daemon = auditmonDaemon("/var/run/auditmon")
+    our_daemon = AuditmonDaemon("/var/run/auditmon")
     our_daemon.start()
     exit()
 
+
 def stop_daemon():
-    our_daemon = auditmonDaemon("/var/run/auditmon")
+    our_daemon = AuditmonDaemon("/var/run/auditmon")
     our_daemon.stop()
     exit()
 
+
 def restart_daemon():
-    our_daemon = auditmonDaemon("/var/run/auditmon")
+    our_daemon = AuditmonDaemon("/var/run/auditmon")
     our_daemon.restart()
     exit()
+
 
 class FileProcessor(FileSystemEventHandler):
     def on_created(self, event):
@@ -83,6 +81,7 @@ class FileProcessor(FileSystemEventHandler):
                 subprocess.run(["/usr/sbin/audit", "-n"])
 
 
+# noinspection PyPep8
 '''
 <record version="2" event="execve(2)" host="aslate.brighton.scluk.com" iso8601="2019-03-20 10:16:00.248 +00:00">
   <path>/usr/bin/rm</path>
@@ -97,10 +96,11 @@ class FileProcessor(FileSystemEventHandler):
 </record>
 '''
 
-to_audit =["execve(2)", "login", "logout","sudo(1m)","ssh"]
+to_audit = ["execve(2)", "login", "logout", "sudo(1m)", "ssh"]
+
 
 # noinspection PyAttributeOutsideInit
-class auditRecord:
+class AuditRecord:
     def __init__(self, event, date):
         global hostname
         self.hostname = hostname
@@ -108,7 +108,7 @@ class auditRecord:
         evs = event.split(' ')
         self.event = evs[0]
         fixed_date = date.replace(' +00:00', ' +0000')
-        self.timestamp = datetime.strptime(fixed_date, '%Y-%m-%d %H:%M:%S.%f %z' ).timestamp()
+        self.timestamp = datetime.strptime(fixed_date, '%Y-%m-%d %H:%M:%S.%f %z').timestamp()
 
         if event.find('pfexec') > -1:
             self.elevated = True
@@ -144,11 +144,12 @@ class auditRecord:
         self.retval = retval
 
     def to_dict(self):
-        #self.message = f"{self.uid}:{self.gid} : {self.event}"
+        # self.message = f"{self.uid}:{self.gid} : {self.event}"
 
         return self.__dict__
 
-class recordHandler(ContentHandler):
+
+class RecordHandler(ContentHandler):
     def __init__(self):
         super().__init__()
         self.stack = []
@@ -165,7 +166,7 @@ class recordHandler(ContentHandler):
         self.current_element = name
 
         if name == "record":
-            self.audit_record = auditRecord(attrs["event"], attrs["iso8601"])
+            self.audit_record = AuditRecord(attrs["event"], attrs["iso8601"])
 
         if name == "subject":
             self.audit_record.add_subject(
@@ -190,10 +191,10 @@ class recordHandler(ContentHandler):
     def endElement(self, name):
         if name == "record":
             if self.audit_record.event in to_audit:
-                #and (
+                # and (
                 #    self.audit_record.auid == 'root' or
                 #    self.user_re.match(self.audit_record.auid) is not None):
-                #logging.info(f'{json.dumps(self.audit_record.to_dict())}')
+                # logging.info(f'{json.dumps(self.audit_record.to_dict())}')
                 logQueue.put(json.dumps(self.audit_record.to_dict()))
             self.audit_record = None
 
@@ -210,9 +211,9 @@ class recordHandler(ContentHandler):
         self.current_value += chars.strip()
 
 
-class taskWorker(threading.Thread):
+class AuditReadWorker(threading.Thread):
     def __init__(self):
-        super(taskWorker, self).__init__()
+        super(AuditReadWorker, self).__init__()
 
     def run(self):
         global hostname
@@ -224,7 +225,8 @@ class taskWorker(threading.Thread):
                 current_files.add(file)
 
                 # Open command pipeline
-                p1 = subprocess.Popen(['/usr/gnu/bin/tail', '-n', '0', '--follow=name', file], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                p1 = subprocess.Popen(['/usr/gnu/bin/tail', '-n', '0', '--follow=name', file], stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, bufsize=128000)
 
                 time.sleep(1)
                 if p1.poll() is not None:
@@ -232,15 +234,17 @@ class taskWorker(threading.Thread):
                     taskQueue.task_done()
                     continue
 
-                p2 = subprocess.Popen(['praudit', '-x'], stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                p2 = subprocess.Popen(['praudit', '-x'], stdin=p1.stdout, stdout=subprocess.PIPE,
+                                      stderr=subprocess.DEVNULL, bufsize=128000)
 
                 parser = make_parser()
-                handler = recordHandler()
+                handler = RecordHandler()
                 parser.setContentHandler(handler)
 
                 # Incrementally process the xml output from praudit
-                for line in p2.stdout:
-                    #logging.info(line)
+                # for line in p2.stdout:
+                for line in iter(p2.stdout.readline, b''):
+                    # logging.info(line)
                     try:
                         parser.feed(line)
                     except Exception:
@@ -280,14 +284,15 @@ class taskWorker(threading.Thread):
             taskQueue.task_done()  # Just in case
 
 
-class logWorker(threading.Thread):
+class LogWriteWorker(threading.Thread):
     def __init__(self):
-        super(logWorker, self).__init__()
+        super(LogWriteWorker, self).__init__()
         self.logfile = None
         self.open_logfile()
 
     def open_logfile(self):
-        self.logfile = open('/var/log/audit.json', 'a')
+        fd = os.open('/var/log/audit.json', os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o640)
+        self.logfile = open(fd, 'a')
 
     def close_logfile(self):
         if self.logfile:
@@ -318,10 +323,12 @@ class logWorker(threading.Thread):
             logging.error(f'logging task thread exiting because of exception : {e}')
             logQueue.task_done()  # Just in case
 
+
 class InterruptHandler(object):
 
     def __init__(self, sig=signal.SIGINT):
         self.sig = sig
+        self.released = False
 
     def __enter__(self):
         self.interrupted = False
@@ -329,6 +336,7 @@ class InterruptHandler(object):
 
         self.original_handler = signal.getsignal(self.sig)
 
+        # noinspection PyUnusedLocal
         def handler(signum, frame):
             self.release()
             self.interrupted = True
@@ -337,7 +345,7 @@ class InterruptHandler(object):
 
         return self
 
-    def __exit__(self, type, value, tb):
+    def __exit__(self, _type, value, tb):
         self.release()
 
     def release(self):
@@ -349,12 +357,12 @@ class InterruptHandler(object):
         self.released = True
 
 
-class auditmonDaemon(Daemon):
+class AuditmonDaemon(Daemon):
     """ Manages running the app as a daemon
     """
 
     def __init__(self, pidfile):
-        super(auditmonDaemon, self).__init__(pidfile)
+        super(AuditmonDaemon, self).__init__(pidfile)
 
     def run(self):
         """ Overridden run method which calls runs the application
@@ -363,8 +371,12 @@ class auditmonDaemon(Daemon):
         """
         run()
 
+
 def run():
     global hostname
+    global watchdir
+    global taskQueue
+    global logQueue
 
     hostname = platform.node()
 
@@ -386,12 +398,12 @@ def run():
     num_worker_threads = 2  # configurable???
 
     for i in range(num_worker_threads):
-        t = taskWorker()
+        t = AuditReadWorker()
         t.daemon = True
         t.start()
 
     logging.info('Starting logger...')
-    logworker = logWorker()
+    logworker = LogWriteWorker()
     logworker.start()
 
     logging.info('Starting watchdog...')
@@ -399,12 +411,11 @@ def run():
     observer = Observer()
 
     # Add the watch
-    watchdir = '/var/audit'
     try:
         logging.info('Adding watch on %s...' % watchdir)
         observer.schedule(FileProcessor(), watchdir)
-    except Exception:
-        logging.error('Cannot watch %s : no permission?' % watchdir)
+    except Exception as e:
+        logging.error(f'Cannot watch %s : no permission? : {e}' % watchdir)
         exit(1)
 
     observer.start()
@@ -423,13 +434,12 @@ def run():
                         break
                     if sighup_handler.interrupted:
                         logging.info('Caught SIGHUP, rotating log file')
-                        continue
 
         except KeyboardInterrupt:
             logging.info('Termination requested, waiting for jobs to complete...')
             break
-        except Exception:
-            logging.info('Unknown exception, waiting for jobs to complete...')
+        except Exception as e:
+            logging.info(f'Caught unexpected exception {e}, waiting for jobs to complete...')
             break
 
     # Signal
@@ -439,5 +449,3 @@ def run():
     observer.stop()
     taskQueue.join()
     logging.info('Terminating')
-
-
