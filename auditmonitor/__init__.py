@@ -224,7 +224,7 @@ class taskWorker(threading.Thread):
                 current_files.add(file)
 
                 # Open command pipeline
-                p1 = subprocess.Popen(['tail', '-n', '0', '--follow=name', file], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+                p1 = subprocess.Popen(['/usr/gnu/bin/tail', '-n', '0', '--follow=name', file], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
 
                 time.sleep(1)
                 if p1.poll() is not None:
