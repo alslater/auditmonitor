@@ -99,7 +99,6 @@ class FileProcessor(FileSystemEventHandler):
 
 to_audit =["execve(2)", "login", "logout","sudo(1m)","ssh"]
 
-
 # noinspection PyAttributeOutsideInit
 class auditRecord:
     def __init__(self, event, date):

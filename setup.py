@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='auditmonitor',
-    version='1.0',
+    version='0.2',
     packages=['auditmonitor'],
     url='https://github.com/alslater/auditmonitor',
     license='',
@@ -12,5 +12,8 @@ setup(
     scripts=[
         'bin/auditmon'
     ],
-    install_requires=['watchdog']
+    install_requires=[
+        'watchdog',
+        'pathtools''
+    ]
 )
