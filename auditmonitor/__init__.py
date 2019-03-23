@@ -23,11 +23,14 @@ hostname = ''
 watchdir = '/var/audit'
 taskQueue = Queue()
 logQueue = Queue()
+daemonized = False;
 
 current_files = set()
 
 
 def start_daemon():
+    global daemonized
+    daemonized = True
     our_daemon = AuditmonDaemon("/var/run/auditmon")
     our_daemon.start()
     exit()
@@ -40,9 +43,21 @@ def stop_daemon():
 
 
 def restart_daemon():
+    global daemonized
+    daemonized = True
     our_daemon = AuditmonDaemon("/var/run/auditmon")
     our_daemon.restart()
     exit()
+
+
+def block_signals(sigset = { signal.SIGINT }):
+    mask = signal.pthread_sigmask(signal.SIG_BLOCK, {})
+    signal.pthread_sigmask(signal.SIG_BLOCK, sigset)
+    return mask
+
+
+def restore_signals(mask):
+    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
 
 class FileProcessor(FileSystemEventHandler):
@@ -96,10 +111,28 @@ class FileProcessor(FileSystemEventHandler):
 </record>
 '''
 
-to_audit = ["execve(2)", "login", "logout", "sudo(1m)", "ssh"]
+## Need to log
+# Logins and Logouts
+# Actions by root or administrators
+
+to_audit = {
+    "execve(2)": ".*-local",
+    "cron-invoke": ".*-local",
+    "login": ".*",
+    "logout": ".*",
+    "sudo(1m)": ".*",
+    "ssh": ".*",
+    "zlogin": ".*",
+    "role login": ".*",
+    "role_logout": ".*",
+    "mount": ".*",
+    "mount(2)": ".*",
+    "umount2(2)": ".*",
+    "su": ".*"
+}
 
 
-# noinspection PyAttributeOutsideInit
+# noinspection PyAttributeOutsideIn it
 class AuditRecord:
     def __init__(self, event, date):
         global hostname
@@ -156,7 +189,12 @@ class RecordHandler(ContentHandler):
         self.audit_record = None
         self.current_element = None
         self.current_value = ''
-        self.user_re = re.compile('.*-local')
+
+        self.rexp = {}
+
+        for event in to_audit:
+            logging.info(f'Compiling regexp "{to_audit[event]}" for event {event}')
+            self.rexp[event] = re.compile(to_audit[event])
 
     def startDocument(self):
         pass
@@ -191,11 +229,11 @@ class RecordHandler(ContentHandler):
     def endElement(self, name):
         if name == "record":
             if self.audit_record.event in to_audit:
-                # and (
-                #    self.audit_record.auid == 'root' or
-                #    self.user_re.match(self.audit_record.auid) is not None):
-                # logging.info(f'{json.dumps(self.audit_record.to_dict())}')
-                logQueue.put(json.dumps(self.audit_record.to_dict()))
+                if self.audit_record.auid == "root" or \
+                     self.audit_record.uid == "root" or \
+                     self.audit_record.ruid == "root" or \
+                     self.rexp[self.audit_record.event].match(self.audit_record.auid) is not None:
+                    logQueue.put(json.dumps(self.audit_record.to_dict()))
             self.audit_record = None
 
         if name == "path":
@@ -224,9 +262,11 @@ class AuditReadWorker(threading.Thread):
                 logging.info(f'{self} Processing file {file}')
                 current_files.add(file)
 
+                mask = block_signals()
+
                 # Open command pipeline
                 p1 = subprocess.Popen(['/usr/gnu/bin/tail', '-n', '0', '--follow=name', file], stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, bufsize=128000)
+                                      stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=128000)
 
                 time.sleep(1)
                 if p1.poll() is not None:
@@ -237,12 +277,13 @@ class AuditReadWorker(threading.Thread):
                 p2 = subprocess.Popen(['praudit', '-x'], stdin=p1.stdout, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, bufsize=128000)
 
+                restore_signals(mask)
+
                 parser = make_parser()
                 handler = RecordHandler()
                 parser.setContentHandler(handler)
 
                 # Incrementally process the xml output from praudit
-                # for line in p2.stdout:
                 for line in iter(p2.stdout.readline, b''):
                     # logging.info(line)
                     try:
@@ -371,12 +412,12 @@ class AuditmonDaemon(Daemon):
         """
         run()
 
-
 def run():
     global hostname
     global watchdir
     global taskQueue
     global logQueue
+    global terminating
 
     hostname = platform.node()
 
@@ -394,6 +435,8 @@ def run():
 
     logging.info('Starting file processing threads...')
 
+    #sigset = block_signals()
+
     # Start the file processing threads
     num_worker_threads = 2  # configurable???
 
@@ -402,6 +445,8 @@ def run():
         t.daemon = True
         t.start()
 
+    #restore_signals(sigset)
+
     logging.info('Starting logger...')
     logworker = LogWriteWorker()
     logworker.start()
@@ -409,6 +454,7 @@ def run():
     logging.info('Starting watchdog...')
     # Start the watchdog observer
     observer = Observer()
+
 
     # Add the watch
     try:
@@ -425,27 +471,34 @@ def run():
         if filename.find("not_terminated") > -1:
             taskQueue.put(os.path.join(watchdir, filename))
 
-    while True:  # loop forever, we'll break when we get ctrl-c or SIGINT
-        try:
-            with InterruptHandler() as sigint_handler:
+    try:
+        with InterruptHandler() as sigint_handler:
+            terminating = False
+            while not terminating:
                 with InterruptHandler(signal.SIGHUP) as sighup_handler:
-                    if sigint_handler.interrupted:
-                        logging.info('Termination requested, waiting for jobs to complete...')
-                        break
-                    if sighup_handler.interrupted:
-                        logging.info('Caught SIGHUP, rotating log file')
+                    while True:  # loop forever, we'll break when we get ctrl-c or SIGINT
+                        time.sleep(0.5)
+                        if sigint_handler.interrupted:
+                            logging.info('Termination requested')
+                            terminating = True
+                            break
+                        if sighup_handler.interrupted:
+                            logQueue.put("ROTATE")
+                            logging.info('Caught SIGHUP, rotating log file')
+                            break # To reset the SIGHUP handler
 
-        except KeyboardInterrupt:
-            logging.info('Termination requested, waiting for jobs to complete...')
-            break
-        except Exception as e:
-            logging.info(f'Caught unexpected exception {e}, waiting for jobs to complete...')
-            break
+    except KeyboardInterrupt:
+        logging.info('Termination requested, waiting for jobs to complete...')
+    except Exception as e:
+        logging.info(f'Caught unexpected exception {e}, waiting for jobs to complete...')
 
-    # Signal
+    logging.info('Stopping the logger thread')
     logQueue.put("STOP")
+    logQueue.join()
     logworker.join()
 
+    logging.info('Stopping the observer')
     observer.stop()
-    taskQueue.join()
+    if daemonized:
+        taskQueue.join()
     logging.info('Terminating')
