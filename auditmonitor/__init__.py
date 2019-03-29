@@ -50,7 +50,7 @@ def restart_daemon():
     exit()
 
 
-def block_signals(sigset = { signal.SIGINT }):
+def block_signals(sigset={signal.SIGINT}):
     mask = signal.pthread_sigmask(signal.SIG_BLOCK, {})
     signal.pthread_sigmask(signal.SIG_BLOCK, sigset)
     return mask
@@ -155,22 +155,28 @@ class AuditRecord:
     def add_arg(self, arg):
         self.args.append(arg)
 
-    def add_subject(self, auid, uid, gid, ruid, rgid, pid, tid):
+    def add_subject(self, auid, uid, gid, ruid, rgid, pid, sid, tid):
         self.auid = auid
         self.uid = uid
         self.gid = gid
         self.ruid = ruid
         self.rgid = rgid
         self.pid = pid
+        self.sid = sid
 
         tidl = tid.split(' ')
-        self.remote = tidl[2]
+
+        if tidl[0] == 0 and tidl[1] == 0:
+            self.remote = "CONSOLE"
+        else:
+            self.remote = tidl[2]
 
         if self.uid == 'root' and self.auid != self.uid:
             self.elevated = True
 
     def add_zone(self, zone):
-        self.zone = zone
+        if zone != 'global':
+            self.hostname = zone
 
     def add_retval(self, result, retval):
         self.result = result
@@ -214,6 +220,7 @@ class RecordHandler(ContentHandler):
                 attrs['ruid'],
                 attrs['rgid'],
                 attrs['pid'],
+                attrs['sid'],
                 attrs['tid']
             )
 
