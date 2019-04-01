@@ -131,16 +131,22 @@ to_audit = {
     "su": ".*"
 }
 
-
 # noinspection PyAttributeOutsideIn it
 class AuditRecord:
     def __init__(self, event, date):
         global hostname
+        global tz_re
+
         self.hostname = hostname
 
         evs = event.split(' ')
         self.event = evs[0]
-        fixed_date = date.replace(' +00:00', ' +0000')
+
+        # Solaris audit format includes a : in the TZ, we need to remove it
+        # to parse it with strptime
+        lastcolon = date.rfind(':')
+        fixed_date = date[:lastcolon] + date[lastcolon+1:]
+
         self.timestamp = datetime.strptime(fixed_date, '%Y-%m-%d %H:%M:%S.%f %z').timestamp()
 
         if event.find('pfexec') > -1:
@@ -182,6 +188,9 @@ class AuditRecord:
         self.result = result
         self.retval = retval
 
+    def set_cron(self):
+        self.cron = True
+
     def to_dict(self):
         # self.message = f"{self.uid}:{self.gid} : {self.event}"
 
@@ -195,6 +204,7 @@ class RecordHandler(ContentHandler):
         self.audit_record = None
         self.current_element = None
         self.current_value = ''
+        self.cron_sids = []
 
         self.rexp = {}
 
@@ -235,7 +245,13 @@ class RecordHandler(ContentHandler):
 
     def endElement(self, name):
         if name == "record":
+            if self.audit_record.event == "cron-invoke":
+                self.cron_sids.append(self.audit_record.sid)
+
             if self.audit_record.event in to_audit:
+                if self.audit_record.event == "execve(2)" and self.audit_record.sid in self.cron_sids:
+                    self.audit_record.set_cron()
+
                 if self.audit_record.auid == "root" or \
                      self.audit_record.uid == "root" or \
                      self.audit_record.ruid == "root" or \
@@ -477,6 +493,9 @@ def run():
     for filename in os.listdir(watchdir):
         if filename.find("not_terminated") > -1:
             taskQueue.put(os.path.join(watchdir, filename))
+        else:
+            logging.info(f'Removing terminated log file {os.path.join(watchdir, filename)}')
+            os.remove(os.path.join(watchdir, filename))
 
     try:
         with InterruptHandler() as sigint_handler:
