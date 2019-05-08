@@ -21,6 +21,7 @@ from pathlib import Path
 import socket
 
 hostname = ''
+ip = ''
 watchdir = '/var/audit'
 taskQueue = Queue()
 logQueue = Queue()
@@ -136,9 +137,11 @@ to_audit = {
 class AuditRecord:
     def __init__(self, event, date):
         global hostname
+        global ip
         global tz_re
 
         self.hostname = hostname
+        self.ipaddr = ip
 
         evs = event.split(' ')
         self.event = evs[0]
@@ -209,7 +212,7 @@ class AuditRecord:
             else:
                 message = message + f" : {self.path}"
 
-        if self.remote != hostname:
+        if self.remote != ip and self.remote != hostname:
             message = message + f" : remote({self.remote})"
 
 
@@ -455,17 +458,32 @@ class AuditmonDaemon(Daemon):
         """
         run()
 
+def get_ip():
+    try:
+        ip = socket.gethostbyaddr(platform.node())
+        ipaddr = ip[2][0]
+    except Exception:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            # doesn't even have to be reachable
+            s.connect(('255.255.255.255', 1))
+            ipaddr = s.getsockname()[0]
+        except:
+            ipaddr = '127.0.0.1'
+        finally:
+            s.close()
+    return ipaddr
+
 def run():
     global hostname
+    global ip
     global watchdir
     global taskQueue
     global logQueue
     global terminating
 
-    try:
-        hostname = socket.gethostbyaddr(platform.node())[2][0]
-    except Exception:
-        hostname = platform.node()
+    hostname = platform.node()
+    ip = get_ip()
 
     logformat = '%(asctime)s %(levelname)s : %(message)s'
 
