@@ -25,7 +25,7 @@ ip = ''
 watchdir = '/var/audit'
 taskQueue = Queue()
 logQueue = Queue()
-daemonized = False;
+daemonized = False
 
 current_files = set()
 
@@ -52,6 +52,7 @@ def restart_daemon():
     exit()
 
 
+# noinspection PyDefaultArgument
 def block_signals(sigset={signal.SIGINT}):
     mask = signal.pthread_sigmask(signal.SIG_BLOCK, {})
     signal.pthread_sigmask(signal.SIG_BLOCK, sigset)
@@ -113,7 +114,7 @@ class FileProcessor(FileSystemEventHandler):
 </record>
 '''
 
-## Need to log
+# What we need to log
 # Logins and Logouts
 # Actions by root or administrators
 
@@ -133,12 +134,12 @@ to_audit = {
     "su": ".*"
 }
 
-# noinspection PyAttributeOutsideIn it
+
+# noinspection PyAttributeOutsideInit
 class AuditRecord:
     def __init__(self, event, date):
         global hostname
         global ip
-        global tz_re
 
         self.hostname = hostname
         self.ipaddr = ip
@@ -149,7 +150,7 @@ class AuditRecord:
         # Solaris audit format includes a : in the TZ, we need to remove it
         # to parse it with strptime
         lastcolon = date.rfind(':')
-        fixed_date = date[:lastcolon] + date[lastcolon+1:]
+        fixed_date = date[:lastcolon] + date[lastcolon + 1:]
 
         self.timestamp = datetime.strptime(fixed_date, '%Y-%m-%d %H:%M:%S.%f %z').timestamp()
 
@@ -166,6 +167,7 @@ class AuditRecord:
     def add_arg(self, arg):
         self.args.append(arg)
 
+    # noinspection PyBroadException
     def add_subject(self, auid, uid, gid, ruid, rgid, pid, sid, tid):
         self.auid = auid
         self.uid = uid
@@ -181,8 +183,8 @@ class AuditRecord:
             self.remote = "CONSOLE"
         else:
             try:
-                ip = socket.gethostbyaddr(tidl[2])
-                self.remote = ip[2][0]
+                rip = socket.gethostbyaddr(tidl[2])
+                self.remote = rip[2][0]
             except Exception:
                 self.remote = tidl[2]
 
@@ -207,14 +209,12 @@ class AuditRecord:
             if self.retval == "0":
                 message = message + f" : {' '.join(self.args)}"
                 if len(self.args) > 0 and self.path != self.args[0] and os.path.isdir(self.path):
-
                     message = message + f" : pwd({self.path})"
             else:
                 message = message + f" : {self.path}"
 
         if self.remote != ip and self.remote != hostname:
             message = message + f" : remote({self.remote})"
-
 
         self.message = message
         return self.__dict__
@@ -276,9 +276,9 @@ class RecordHandler(ContentHandler):
                     self.audit_record.set_cron()
 
                 if self.audit_record.auid == "root" or \
-                     self.audit_record.uid == "root" or \
-                     self.audit_record.ruid == "root" or \
-                     self.rexp[self.audit_record.event].match(self.audit_record.auid) is not None:
+                        self.audit_record.uid == "root" or \
+                        self.audit_record.ruid == "root" or \
+                        self.rexp[self.audit_record.event].match(self.audit_record.auid) is not None:
                     logQueue.put(json.dumps(self.audit_record.to_dict()))
             self.audit_record = None
 
@@ -458,22 +458,25 @@ class AuditmonDaemon(Daemon):
         """
         run()
 
+
+# noinspection PyBroadException
 def get_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         # doesn't even have to be reachable
         s.connect(('8.8.8.8', 1))
         ipaddr = s.getsockname()[0]
-    except:
+    except Exception:
         try:
-            ip = socket.gethostbyaddr(platform.node())
-            ipaddr = ip[2][0]
-        except:
+            hip = socket.gethostbyaddr(platform.node())
+            ipaddr = hip[2][0]
+        except Exception:
             ipaddr = "127.0.0.1"
     finally:
         s.close()
 
     return ipaddr
+
 
 def run():
     global hostname
@@ -512,7 +515,6 @@ def run():
     logging.info('Starting watchdog...')
     # Start the watchdog observer
     observer = Observer()
-
 
     # Add the watch
     try:
@@ -560,7 +562,7 @@ def run():
                         if sighup_handler.interrupted:
                             logQueue.put("ROTATE")
                             logging.info('Caught SIGHUP, rotating log file')
-                            break # To reset the SIGHUP handler
+                            break  # To reset the SIGHUP handler
 
     except KeyboardInterrupt:
         logging.info('Termination requested, waiting for jobs to complete...')
