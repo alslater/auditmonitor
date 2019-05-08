@@ -203,7 +203,15 @@ class AuditRecord:
         self.cron = True
 
     def to_dict(self):
-        message = f"auditmon : {self.hostname} : {self.auid} as {self.uid}:{self.gid} : {self.event} : {self.result}"
+        event = self.event
+
+        try:
+            if self.cron:
+                event = event + ' (cron)'
+        except AttributeError:
+            pass
+
+        message = f"auditmon : {self.hostname} : {self.auid} as {self.uid}:{self.gid} : {event} : {self.result}"
 
         if self.event == "execve(2)":
             if self.retval == "0":
@@ -217,6 +225,7 @@ class AuditRecord:
             message = message + f" : remote({self.remote})"
 
         self.message = message
+
         return self.__dict__
 
 
