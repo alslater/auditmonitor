@@ -18,6 +18,7 @@ import json
 import re
 from auditmonitor.daemon import Daemon
 from pathlib import Path
+import socket
 
 hostname = ''
 watchdir = '/var/audit'
@@ -154,6 +155,7 @@ class AuditRecord:
         else:
             self.elevated = False
         self.args = []
+        self.remote = ""
 
     def set_path(self, path):
         self.path = path
@@ -175,7 +177,11 @@ class AuditRecord:
         if tidl[0] == 0 and tidl[1] == 0:
             self.remote = "CONSOLE"
         else:
-            self.remote = tidl[2]
+            try:
+                ip = socket.gethostbyaddr(tidl[2])
+                self.remote = ip[2][0]
+            except Exception:
+                self.remote = tidl[2]
 
         if self.uid == 'root' and self.auid != self.uid:
             self.elevated = True
@@ -192,8 +198,22 @@ class AuditRecord:
         self.cron = True
 
     def to_dict(self):
-        # self.message = f"{self.uid}:{self.gid} : {self.event}"
+        message = f"auditmon : {self.hostname} : {self.auid} as {self.uid}:{self.gid} : {self.event} : {self.result}"
 
+        if self.event == "execve(2)":
+            if self.retval == "0":
+                message = message + f" : {' '.join(self.args)}"
+                if len(self.args) > 0 and self.path != self.args[0] and os.path.isdir(self.path):
+
+                    message = message + f" : pwd({self.path})"
+            else:
+                message = message + f" : {self.path}"
+
+        if self.remote != hostname:
+            message = message + f" : remote({self.remote})"
+
+
+        self.message = message
         return self.__dict__
 
 
@@ -209,7 +229,7 @@ class RecordHandler(ContentHandler):
         self.rexp = {}
 
         for event in to_audit:
-            logging.info(f'Compiling regexp "{to_audit[event]}" for event {event}')
+            logging.debug(f'Compiling regexp "{to_audit[event]}" for event {event}')
             self.rexp[event] = re.compile(to_audit[event])
 
     def startDocument(self):
@@ -297,7 +317,7 @@ class AuditReadWorker(threading.Thread):
                     taskQueue.task_done()
                     continue
 
-                p2 = subprocess.Popen(['praudit', '-x'], stdin=p1.stdout, stdout=subprocess.PIPE,
+                p2 = subprocess.Popen(['/usr/sbin/praudit', '-x'], stdin=p1.stdout, stdout=subprocess.PIPE,
                                       stderr=subprocess.DEVNULL, bufsize=128000)
 
                 restore_signals(mask)
@@ -442,7 +462,10 @@ def run():
     global logQueue
     global terminating
 
-    hostname = platform.node()
+    try:
+        hostname = socket.gethostbyaddr(platform.node())[2][0]
+    except Exception:
+        hostname = platform.node()
 
     logformat = '%(asctime)s %(levelname)s : %(message)s'
 
@@ -451,14 +474,9 @@ def run():
         'level': logging.INFO
     }
 
-    # if logfile:
-    #    logconfig['filename'] = logfile
-
     logging.basicConfig(**logconfig)
 
     logging.info('Starting file processing threads...')
-
-    #sigset = block_signals()
 
     # Start the file processing threads
     num_worker_threads = 2  # configurable???
@@ -467,8 +485,6 @@ def run():
         t = AuditReadWorker()
         t.daemon = True
         t.start()
-
-    #restore_signals(sigset)
 
     logging.info('Starting logger...')
     logworker = LogWriteWorker()
