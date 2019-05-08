@@ -459,19 +459,20 @@ class AuditmonDaemon(Daemon):
         run()
 
 def get_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
-        ip = socket.gethostbyaddr(platform.node())
-        ipaddr = ip[2][0]
-    except Exception:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # doesn't even have to be reachable
+        s.connect(('8.8.8.8', 1))
+        ipaddr = s.getsockname()[0]
+    except:
         try:
-            # doesn't even have to be reachable
-            s.connect(('255.255.255.255', 1))
-            ipaddr = s.getsockname()[0]
+            ip = socket.gethostbyaddr(platform.node())
+            ipaddr = ip[2][0]
         except:
-            ipaddr = '127.0.0.1'
-        finally:
-            s.close()
+            ipaddr = "127.0.0.1"
+    finally:
+        s.close()
+
     return ipaddr
 
 def run():
