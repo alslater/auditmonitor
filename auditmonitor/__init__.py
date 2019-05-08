@@ -506,12 +506,26 @@ def run():
     observer.start()
 
     # Find any existing audit files and queue them for monitoring
+    audit_files = []
     for filename in os.listdir(watchdir):
         if filename.find("not_terminated") > -1:
-            taskQueue.put(os.path.join(watchdir, filename))
+            audit_files.append(filename)
         else:
             logging.info(f'Removing terminated log file {os.path.join(watchdir, filename)}')
             os.remove(os.path.join(watchdir, filename))
+
+    if len(audit_files) > 1:
+        audit_files.sort()
+        # Remove old log files
+        for afile in audit_files[:-1]:
+            logging.info(f'Removing old log file {os.path.join(watchdir, afile)}')
+            os.remove(os.path.join(watchdir, afile))
+
+        logging.info(f'Enqueuing log file {os.path.join(watchdir, audit_files[-1])}')
+        taskQueue.put(os.path.join(watchdir, audit_files[-1]))
+    else:
+        logging.info(f'Enqueuing log file {os.path.join(watchdir, audit_files[0])}')
+        taskQueue.put(os.path.join(watchdir, audit_files[0]))
 
     try:
         with InterruptHandler() as sigint_handler:
