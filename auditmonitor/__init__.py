@@ -26,6 +26,7 @@ watchdir = '/var/audit'
 taskQueue = Queue()
 logQueue = Queue()
 daemonized = False
+terminating = False
 
 current_files = set()
 
@@ -188,8 +189,7 @@ class AuditRecord:
             except Exception:
                 self.remote = tidl[2]
 
-        if self.uid == 'root' and self.auid != self.uid:
-            self.elevated = True
+        self.elevated = self.auid != self.uid
 
     def add_zone(self, zone):
         if zone != 'global':
@@ -287,6 +287,7 @@ class RecordHandler(ContentHandler):
                 if self.audit_record.auid == "root" or \
                         self.audit_record.uid == "root" or \
                         self.audit_record.ruid == "root" or \
+                        self.audit_record.elevated or \
                         self.rexp[self.audit_record.event].match(self.audit_record.auid) is not None:
                     logQueue.put(json.dumps(self.audit_record.to_dict()))
             self.audit_record = None
@@ -461,7 +462,7 @@ class AuditmonDaemon(Daemon):
         super(AuditmonDaemon, self).__init__(pidfile)
 
     def run(self):
-        """ Overridden run method which calls runs the application
+        """ Overridden run method which runs the application
 
         :return: None
         """
@@ -527,10 +528,10 @@ def run():
 
     # Add the watch
     try:
-        logging.info('Adding watch on %s...' % watchdir)
+        logging.info(f'Adding watch on {watchdir}...')
         observer.schedule(FileProcessor(), watchdir)
     except Exception as e:
-        logging.error(f'Cannot watch %s : no permission? : {e}' % watchdir)
+        logging.error(f'Cannot watch {watchdir} : no permission? : {e}')
         exit(1)
 
     observer.start()
