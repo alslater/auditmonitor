@@ -34,7 +34,7 @@ class Daemon(object):
                 # exit first parent
                 sys.exit(0)
         except OSError as e:
-            logging.error("fork #1 failed: %d (%s)\n" % (e.errno, e.strerror))
+            logging.error(f"fork #1 failed: {e.errno} ({e.strerror})\n")
             sys.exit(1)
 
         # decouple from parent environment
@@ -65,7 +65,7 @@ class Daemon(object):
         # write pidfile
         atexit.register(self.delpid)
         pid = str(os.getpid())
-        open(self.pidfile, 'w+').write("%s\n" % pid)
+        open(self.pidfile, 'w+').write(f"{pid}\n")
 
     def delpid(self):
         try:
